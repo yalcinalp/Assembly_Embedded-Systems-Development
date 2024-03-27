@@ -23,19 +23,36 @@ CONFIG DEBUG = OFF      ; Disable In-Circuit Debugger
 
 GLOBAL var1
 GLOBAL var2
-GLOBAL result
+GLOBAL var3
+    
+GLOBAL prev_re0
+GLOBAL prev_re1
+
+GLOBAL b_work
+GLOBAL c_work
+
+
 
 ; Define space for the variables in RAM
 PSECT udata_acs
 var1:
     DS 1 ; Allocate 1 byte for var1
 var2:
-    DS 1 
-temp_result:
-    DS 1   
-result: 
+    DS 1
+var3:
     DS 1
 
+prev_re0:
+    DS 1
+prev_re1:
+    DS 1 
+ 
+    
+b_work:
+    DS 1
+c_work:
+    DS 1
+    
 
 PSECT resetVec,class=CODE,reloc=2
 resetVec:
@@ -43,27 +60,205 @@ resetVec:
 
 PSECT CODE
 main:
-    clrf var1	; var1 = 0		
-    clrf var2   ; var2 = 0		
-    clrf result ; result = 0
+    clrf var1	; var1 = 0
+    clrf var2
+    clrf var3
+    
+    clrf prev_re0
+    clrf prev_re1
+    
+    clrf b_work
+    clrf c_work
+    
+    
+    ; PORTB
+    ; LATB
+    ; TRISB determines whether the port is input/output
+    ; set output ports
+    
+    clrf TRISB
+    clrf TRISC
+    clrf TRISD
+    setf TRISE ; PORTE is input
 
-    movlw 4     ; WREG = 4 hexadecimal -> 04h, binary -> 0100B
-    movwf var1  ; var1 = 4; 
+    setf LATB ; alp: this one light up all as well 
+    setf LATC ; light up all pins in PORTC
+    setf LATD
+    
+    call busy_wait
+    
+    clrf LATB
+    clrf LATC ; light up all pins in PORTC
+    clrf LATD
 
-    movlw 5     ; WREG = 5
-    movwf var2  ; var1 = 5; 
+main_loop:
+    ; Round robin
+    call main_wait			
+    call update_display			
+    goto main_loop
 
-    call fSum   ; call the function fSum and PC will push the next instruction address to the Stack
-    movwf result; result = WREG
-    comf result ; result = the complement of the result value 
+busy_wait:
+    
+    ; for (var3 = 5; var3 != 0; ; --var3)
+	; for (var2 = 0; var2 != 255; ; ++var1)
+	    ; for (var1 = 255; var1 != 0; --var1)
+    
+    movlw 00000101B
+    movwf var3
+    
+    most_outer_loop:
+	
+	    movlw 0
+	    movwf var2		; var2 = 0
+	    outer_loop_start:
+		setf var1	; var1 = 255
+		loop_start:
+		    decf var1
+		    bnz loop_start
+		incfsz var2	 
+		bra outer_loop_start
+	
+	decf var3
+	bnz most_outer_loop
+	
+    return
+    
+    
+main_wait:
+    ; similar to busy_wait but half time
+    
+    movlw 00000101B
+    movwf var3
+    
+    most_outer_loop2:
+	
+	    movlw 192
+	    movwf var2		; var2 = 192
+	    outer_loop_start2:
+		movlw 77
+		movwf var1	; var1 = 77
+		loop_start2:
+		    decf var1
+		    
+		    call check_buttons
+		    
+		    bnz loop_start2
+		incfsz var2	  
+		bra outer_loop_start2
+	
+	decf var3
+	bnz most_outer_loop2
+	
+    return
+
+curr_re0_check:
+    
+    btfss PORTE, 0
+	btg c_work, 0
+    return
+    
+curr_re1_check:
+    
+    btfss PORTE, 1
+	btg b_work, 0
+    return
+    
+ 
+check_buttons:
+    
+    ; if (prev_re0 == 1 AND curr_re0 == 0): b_state_change = 1
+    ; in all conditions we need to update prev_re0 and prev_re1 all the time
+    
+    btfsc prev_re1, 0
+	call curr_re1_check
+	
+    bcf prev_re1, 0	    ; Clear prev_re1
+    btfsc PORTE, 1	    ; Check if PORTE[1] is set
+	bsf prev_re1, 0     ; Set prev_re1 if PORTE[1] was set
+	
+    btfsc prev_re0, 0
+	call curr_re0_check
+    
+    bcf prev_re0, 0	    ; Clear prev_re0
+    btfsc PORTE, 0	    ; Check if LSB of PORTE is set
+	bsf prev_re0, 0     ; Set prev_re0 if PORTE LSB was set
+
+    return
+
+usual_b_light:
+    
+    rlncf LATB		   ; shift bits to left and rotate the most sig. bit?? 
+    bsf LATB, 0
+    
+    return
   
-    goto main   ; Jump to the label main 
 
-fSum:
-    clrf temp_result 	; temp_result = 0
-    movf var1,W		; WREG = var1 = 4
-    addwf var2,0 	; WREG = WREG + var2
-    movwf temp_result,1   ; temp_result = WREG 
-    return		; The function terminates
+b_algo_light:
+    
+    ; if LATB == 255 (means that all leds are up) we need to reset it
+    btfss LATB, 7
+	bra else2
+    clrf LATB
+    bra continue2
+    else2:
+	call usual_b_light
+    continue2:
+    return
 
+    
+usual_c_light:
+    
+    rrncf LATC		; shift bits to right and rotate the most sig. bit?? 
+    bsf LATC, 7		; Set the 7th bit of LATC to "1"
+
+    return
+    
+    
+c_algo_light:
+    ; if LATC == 255 (means that all leds are up) we need to reset it
+    btfss LATC, 0
+	bra else3
+    clrf LATC
+    bra continue3
+    else3:
+	call usual_c_light
+    continue3:
+    return    
+    
+
+handle_b:
+    
+    btfss b_work, 0
+	bra dont_light_b
+
+    call b_algo_light
+    bra continue4
+    dont_light_b:
+	clrf LATB
+
+    continue4:
+    return
+    
+handle_c:
+
+    btfss c_work, 0
+	bra dont_light_c
+	
+    call c_algo_light
+    bra continue5
+    
+    dont_light_c:
+    	clrf LATC    	
+    continue5:
+
+    return 
+    
+
+update_display:
+    
+    btg PORTD, 0
+    call handle_b
+    call handle_c
+    return
+    
 end resetVec
